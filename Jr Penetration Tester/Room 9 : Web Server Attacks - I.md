@@ -614,3 +614,190 @@ The Nginx investigation mirrors the Apache workflow:
 6. Review `/etc/nginx/sites-available/` when shell access is available.
 
 Although the directives differ (`server_tokens`, `autoindex`, and `stub_status`), the investigative methodology remains the same: identify unnecessary information disclosure, enumerate exposed resources, and document configuration weaknesses for remediation.
+# 🛡️ Common Web Server Misconfigurations: Security Headers, Nikto Scanning & Cross-Platform Findings
+
+After examining Apache, Python HTTP Server, Node.js, and Nginx individually, several security weaknesses appear consistently across all server types. While each platform has different configuration directives and file locations, the investigative workflow remains the same: inspect HTTP headers, verify browser security protections, run automated scanners, and identify recurring misconfiguration patterns.
+
+## ⚡ Cross-Server Security Audit Workflow
+
+1. **Inspect Response Headers**: Use `curl -sI` to check whether security headers are present.
+2. **Compare Multiple Servers**: Audit every exposed service (ports **80**, **8000**, **3000**, and **8080**) to identify missing protections.
+3. **Verify HTTPS Headers**: Confirm whether `Strict-Transport-Security` is applicable based on protocol usage.
+4. **Run Nikto**: Perform an automated web server scan to detect common misconfigurations and exposed resources.
+5. **Review Scan Findings**: Prioritize exposed status pages, directory listings, backup files, and missing security headers.
+6. **Document Cross-Platform Patterns**: Compare findings across all web servers to identify systemic configuration weaknesses.
+
+---
+
+# 🔒 Security Headers
+
+**Security headers** are HTTP response headers that instruct browsers how to process web content safely. They help prevent client-side attacks such as clickjacking, MIME sniffing, and cross-site scripting.
+
+None of the servers in this lab sends these headers by default, making this a shared security gap across all four platforms.
+
+## Common Security Headers
+
+| Header | Protection | Example Value |
+|--------|------------|---------------|
+| `X-Frame-Options` | Prevents clickjacking by blocking iframe embedding | `DENY` or `SAMEORIGIN` |
+| `X-Content-Type-Options` | Prevents MIME sniffing | `nosniff` |
+| `Content-Security-Policy` | Restricts where scripts and other resources can load from | `default-src 'self'` |
+| `Referrer-Policy` | Controls what information appears in the `Referer` header | `no-referrer` or `strict-origin` |
+| `Strict-Transport-Security` | Forces browsers to use HTTPS for future requests | `max-age=31536000` |
+
+> **Note:** `X-Frame-Options` has largely been superseded by `Content-Security-Policy: frame-ancestors`, which provides more granular clickjacking protection. Modern hardened websites may intentionally omit `X-Frame-Options` if CSP already enforces this behavior.
+
+---
+
+# 🔍 Auditing Security Headers
+
+Audit every server using a single loop.
+
+### Command
+
+```bash
+for port in 80 8000 3000 8080; do
+    echo "=== Port $port ==="
+    curl -sI http://10.49.130.22:$port/ | \
+    grep -iE "x-frame-options|x-content-type|content-security-policy|strict-transport|referrer-policy" \
+    || echo "(no security headers found)"
+done
+```
+
+### Example Output
+
+```text
+=== Port 80 ===
+(no security headers found)
+=== Port 8000 ===
+(no security headers found)
+=== Port 3000 ===
+(no security headers found)
+=== Port 8080 ===
+(no security headers found)
+```
+
+### Why It Matters
+
+When `grep` returns no output, none of the expected security headers is present.
+
+This demonstrates that:
+
+- Apache lacks browser security headers.
+- Python HTTP Server lacks browser security headers.
+- Node.js lacks browser security headers.
+- Nginx lacks browser security headers.
+
+These protections require deliberate configuration—they are **not enabled by default**.
+
+> **Note:** `Strict-Transport-Security` only functions over HTTPS. Since this lab uses HTTP, its absence is expected and is included for completeness rather than being treated as an active misconfiguration.
+
+---
+
+# 🔎 Automated Scanning with Nikto
+
+**Nikto** is a web server scanner that quickly identifies:
+
+- Outdated software
+- Missing security headers
+- Exposed administration pages
+- Directory listings
+- Backup files
+- Common web server misconfigurations
+
+Unlike stealthier reconnaissance tools, Nikto generates significant traffic and is intended for **authorized security assessments**.
+
+## Run a Basic Scan
+
+```bash
+nikto -h http://10.49.130.22:80 -nointeractive
+```
+
+### Example Output
+
+```text
+- Nikto v2.1.5
+---------------------------------------------------------------------------
++ Target IP:          10.49.130.22
++ Target Hostname:    10.49.130.22
++ Target Port:        80
+---------------------------------------------------------------------------
++ Server: Apache/2.4.58 (Ubuntu)
++ Server leaks inodes via ETags
++ X-Frame-Options header is missing
++ Allowed HTTP Methods: HEAD, GET, POST, OPTIONS
++ /server-status exposed
++ /files/ directory indexing enabled
++ /files/ contains interesting content
++ 6544 items checked
+---------------------------------------------------------------------------
+```
+
+The `-nointeractive` option prevents Nikto from pausing for user input, making it suitable for scripted assessments.
+
+---
+
+# 📋 Interpreting Nikto Findings
+
+Focus on lines beginning with `+`.
+
+Common findings include:
+
+| Finding | Security Impact |
+|---------|-----------------|
+| `Server: Apache/2.4.58` | Version disclosure |
+| Missing `X-Frame-Options` | Clickjacking risk |
+| `/server-status` | Operational information leakage |
+| `/files/` | Directory indexing enabled |
+| `backup.bak` | Potential source code exposure |
+| ETag inode leak | Minor information disclosure |
+
+On this intentionally vulnerable Apache server, Nikto correctly identifies multiple previously discovered weaknesses.
+
+---
+
+# ⚡ Faster Nikto Scans
+
+A full Nikto scan is comprehensive but can be noisy.
+
+For quicker assessments, use **Tuning**.
+
+```bash
+nikto -h TARGET -Tuning 123
+```
+
+This limits scanning to the most common high-value checks while reducing unnecessary requests.
+
+> **Tip:** Tuning codes are written as a continuous string (`123`), **not** comma-separated.
+
+---
+
+# 📊 Cross-Server Misconfiguration Comparison
+
+Looking across all four servers reveals recurring patterns.
+
+| Misconfiguration | Apache | Python HTTP | Node.js | Nginx |
+|-----------------|---------|-------------|---------|--------|
+| Version disclosure | Yes | Yes | Partial | Yes |
+| Directory listing | `/files/` | Root directory | N/A | `/files/` |
+| Status/debug endpoint | `/server-status` | N/A | `/api/debug/env`, `/api/routes` | `/nginx_status` |
+| Sensitive files exposed | `backup.bak`, `internal-notes.txt` | `.env`, `notes.txt`, `backup.zip` | `config.js` | `server-config.txt`, `deploy-notes.txt` |
+| Missing security headers | Yes | Yes | Yes | Yes |
+
+---
+
+# 🎯 Key Takeaways
+
+Although Apache, Python HTTP Server, Node.js, and Nginx use different configuration systems, they repeatedly expose the same categories of weaknesses.
+
+The most common patterns include:
+
+- **Version disclosure** through HTTP headers
+- **Directory listings** exposing operational files
+- **Status or debug endpoints** revealing internal information
+- **Backup files** accidentally left inside web roots
+- **Missing browser security headers**
+
+These issues usually stem from **default configurations** that prioritize ease of deployment rather than security.
+
+In real-world penetration tests, discovering these patterns often indicates that servers were deployed using default settings without undergoing a dedicated hardening review.
